@@ -5,9 +5,14 @@ const { monthOf, pad, lastMonths, toBase } = require('./util');
 const attach = require('./attachments');
 
 /** 计入「收入」统计的类型 */
-const INCOME_TYPES = ['income', 'interest', 'refund', 'reimburse'];
+const INCOME_TYPES = ['income', 'interest', 'reimburse'];
 /** 计入「支出」统计的类型（转账、借贷、投资不计入，避免虚增） */
 const EXPENSE_TYPES = ['expense', 'fee'];
+/**
+ * 负支出类型：资金回到账户（余额 +），但统计上冲减所属分类的支出，
+ * 用于网购退款、返现/还款金等场景——记为收入会虚增收入侧且分类报表失真。
+ */
+const REFUND_TYPES = ['refund', 'cashback'];
 
 const TXN_SELECT = `
 SELECT t.*,
@@ -35,7 +40,8 @@ function decorate(t) {
   // is_income/is_expense = 余额方向（供 UI 符号/配色用，含借入/收还款等入出账类型），
   // 统计口径仍以 INCOME_TYPES/EXPENSE_TYPES 为准（borrow 等不计收支）
   t.is_income = INCOME_TYPES.includes(t.type) || ['repay_receive', 'borrow'].includes(t.type);
-  t.is_expense = EXPENSE_TYPES.includes(t.type) || ['lend', 'repay_pay'].includes(t.type);
+  // 退款/返现按负支出展示：余额方向为入（is_income 不含它们），报表与列表均从支出侧冲减
+  t.is_expense = EXPENSE_TYPES.includes(t.type) || REFUND_TYPES.includes(t.type) || ['lend', 'repay_pay'].includes(t.type);
   return t;
 }
 
@@ -52,8 +58,9 @@ function buildWhere(ledgerId, f = {}) {
     where.push('t.type = ?');
     params.push(f.type);
   } else if (f.kind === 'expense') {
-    where.push(`t.type IN (${EXPENSE_TYPES.map(() => '?').join(',')})`);
-    params.push(...EXPENSE_TYPES);
+    const types = [...EXPENSE_TYPES, ...REFUND_TYPES];
+    where.push(`t.type IN (${types.map(() => '?').join(',')})`);
+    params.push(...types);
   } else if (f.kind === 'income') {
     where.push(`t.type IN (${INCOME_TYPES.map(() => '?').join(',')})`);
     params.push(...INCOME_TYPES);
@@ -112,9 +119,10 @@ function listTransactions(ledgerId, f = {}) {
   const sum = get(
     `SELECT
        COALESCE(SUM(CASE WHEN t.type IN (${INCOME_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents ELSE 0 END),0) AS income,
-       COALESCE(SUM(CASE WHEN t.type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents ELSE 0 END),0) AS expense
+       COALESCE(SUM(CASE WHEN t.type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents
+                          WHEN t.type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -t.amount_base_cents ELSE 0 END),0) AS expense
      FROM transactions t LEFT JOIN categories c ON c.id = t.category_id LEFT JOIN accounts a ON a.id = t.account_id LEFT JOIN categories pc ON pc.id = c.parent_id WHERE ${sql}`,
-    ...INCOME_TYPES, ...EXPENSE_TYPES, ...params
+    ...INCOME_TYPES, ...EXPENSE_TYPES, ...REFUND_TYPES, ...params
   );
   return {
     rows, total, page, pageSize,
@@ -134,6 +142,7 @@ function groupByDate(rows) {
     cur.items.push(r);
     if (INCOME_TYPES.includes(r.type)) cur.income += Number(r.amount_base_cents);
     if (EXPENSE_TYPES.includes(r.type)) cur.expense += Number(r.amount_base_cents);
+    if (REFUND_TYPES.includes(r.type)) cur.expense -= Number(r.amount_base_cents);
   }
   // 给每笔带上「关联了几张账单截图」，列表页据此显示 📎 标记（一次查询，避免 N+1）
   attach.attachCounts(rows);
@@ -173,7 +182,7 @@ function createTransaction(ledgerId, userId, d) {
   const currency = d.currency || 'CNY';
   const accountId = pickAccount(ledgerId, d.account_id);
   const toAccountId = pickAccount(ledgerId, d.to_account_id);
-  if (['expense', 'income', 'lend', 'borrow', 'repay_pay', 'repay_receive', 'fee', 'interest'].includes(type) && !accountId) {
+  if (['expense', 'income', 'lend', 'borrow', 'repay_pay', 'repay_receive', 'fee', 'interest', 'refund', 'cashback'].includes(type) && !accountId) {
     throw new Error('请选择账户');
   }
   if (isAdjust && !accountId) throw new Error('余额调整需要指定账户');
@@ -401,10 +410,11 @@ function summary(ledgerId, start, end) {
   const row = get(
     `SELECT
       COALESCE(SUM(CASE WHEN type IN (${INCOME_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS income,
-      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS expense,
+      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents
+                        WHEN type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -amount_base_cents ELSE 0 END),0) AS expense,
       COUNT(*) AS count
      FROM transactions WHERE ledger_id = ? AND deleted_at IS NULL AND txn_date BETWEEN ? AND ?`,
-    ...INCOME_TYPES, ...EXPENSE_TYPES, ledgerId, start, end
+    ...INCOME_TYPES, ...EXPENSE_TYPES, ...REFUND_TYPES, ledgerId, start, end
   );
   const income = Number(row?.income || 0);
   const expense = Number(row?.expense || 0);
@@ -413,12 +423,17 @@ function summary(ledgerId, start, end) {
 
 /** 按一级分类聚合 */
 function categoryBreakdown(ledgerId, start, end, kind = 'expense') {
-  const types = kind === 'income' ? INCOME_TYPES : EXPENSE_TYPES;
+  const types = kind === 'income' ? INCOME_TYPES : [...EXPENSE_TYPES, ...REFUND_TYPES];
+  // 支出侧：退款/返现按负号冲减所属分类；收入侧口径不变
+  const sumExpr = kind === 'income'
+    ? 'SUM(t.amount_base_cents)'
+    : `SUM(CASE WHEN t.type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -t.amount_base_cents ELSE t.amount_base_cents END)`;
+  const extraParams = kind === 'income' ? [] : REFUND_TYPES;
   const rows = all(
     `SELECT COALESCE(pc.name, c.name, '未分类') AS name,
             COALESCE(pc.icon, c.icon, '🏷️') AS icon,
             COALESCE(pc.color, c.color, '#8c8c8c') AS color,
-            SUM(t.amount_base_cents) AS total, COUNT(*) AS cnt
+            ${sumExpr} AS total, COUNT(*) AS cnt
      FROM transactions t
      LEFT JOIN categories c ON c.id = t.category_id
      LEFT JOIN categories pc ON pc.id = c.parent_id
@@ -426,22 +441,25 @@ function categoryBreakdown(ledgerId, start, end, kind = 'expense') {
        AND t.type IN (${types.map(() => '?').join(',')})
      GROUP BY COALESCE(pc.name, c.name, '未分类')
      ORDER BY total DESC`,
-    ledgerId, start, end, ...types
+    ledgerId, start, end, ...extraParams, ...types
   );
   return rows.map((r) => ({ ...r, total: Number(r.total), cnt: Number(r.cnt) }));
 }
 
 /** 按二级分类聚合（用于下钻） */
 function subcategoryBreakdown(ledgerId, start, end, kind = 'expense', topName = null) {
-  const types = kind === 'income' ? INCOME_TYPES : EXPENSE_TYPES;
+  const types = kind === 'income' ? INCOME_TYPES : [...EXPENSE_TYPES, ...REFUND_TYPES];
+  const sumExpr = kind === 'income'
+    ? 'SUM(t.amount_base_cents)'
+    : `SUM(CASE WHEN t.type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -t.amount_base_cents ELSE t.amount_base_cents END)`;
   let sql = `SELECT c.name AS name, c.icon AS icon, c.color AS color, COALESCE(pc.name,'未分类') AS parent,
-              SUM(t.amount_base_cents) AS total, COUNT(*) AS cnt
+              ${sumExpr} AS total, COUNT(*) AS cnt
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
        LEFT JOIN categories pc ON pc.id = c.parent_id
        WHERE t.ledger_id = ? AND t.deleted_at IS NULL AND t.txn_date BETWEEN ? AND ?
          AND t.type IN (${types.map(() => '?').join(',')})`;
-  const params = [ledgerId, start, end, ...types];
+  const params = [ledgerId, start, end, ...(kind === 'income' ? [] : REFUND_TYPES), ...types];
   if (topName) { sql += ' AND COALESCE(pc.name, c.name) = ?'; params.push(topName); }
   sql += ' GROUP BY c.id ORDER BY total DESC';
   return all(sql, ...params).map((r) => ({ ...r, total: Number(r.total), cnt: Number(r.cnt) }));
@@ -455,10 +473,11 @@ function monthlyTrend(ledgerId, months = 6, ref = new Date()) {
   const rows = all(
     `SELECT strftime('%Y-%m', txn_date) AS m,
       COALESCE(SUM(CASE WHEN type IN (${INCOME_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS income,
-      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS expense
+      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents
+                        WHEN type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -amount_base_cents ELSE 0 END),0) AS expense
      FROM transactions WHERE ledger_id = ? AND deleted_at IS NULL AND txn_date BETWEEN ? AND ?
      GROUP BY m`,
-    ...INCOME_TYPES, ...EXPENSE_TYPES, ledgerId, from, to
+    ...INCOME_TYPES, ...EXPENSE_TYPES, ...REFUND_TYPES, ledgerId, from, to
   );
   const map = new Map(rows.map((r) => [r.m, r]));
   return list.map((m) => {
@@ -471,13 +490,14 @@ function monthlyTrend(ledgerId, months = 6, ref = new Date()) {
 function memberBreakdown(ledgerId, start, end) {
   return all(
     `SELECT u.id, u.display_name AS name, u.avatar_color AS color,
-       COALESCE(SUM(CASE WHEN t.type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents ELSE 0 END),0) AS expense,
+       COALESCE(SUM(CASE WHEN t.type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents
+                         WHEN t.type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -t.amount_base_cents ELSE 0 END),0) AS expense,
        COALESCE(SUM(CASE WHEN t.type IN (${INCOME_TYPES.map(() => '?').join(',')}) THEN t.amount_base_cents ELSE 0 END),0) AS income,
        COUNT(*) AS cnt
      FROM transactions t JOIN users u ON u.id = t.user_id
      WHERE t.ledger_id = ? AND t.deleted_at IS NULL AND t.txn_date BETWEEN ? AND ?
      GROUP BY u.id ORDER BY expense DESC`,
-    ...EXPENSE_TYPES, ...INCOME_TYPES, ledgerId, start, end
+    ...EXPENSE_TYPES, ...REFUND_TYPES, ...INCOME_TYPES, ledgerId, start, end
   ).map((r) => ({ ...r, expense: Number(r.expense), income: Number(r.income), cnt: Number(r.cnt) }));
 }
 
@@ -485,12 +505,13 @@ function memberBreakdown(ledgerId, start, end) {
 function dailyBreakdown(ledgerId, start, end) {
   return all(
     `SELECT txn_date AS date,
-      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS expense,
+      COALESCE(SUM(CASE WHEN type IN (${EXPENSE_TYPES.map(() => '?').join(',')}) THEN amount_base_cents
+                        WHEN type IN (${REFUND_TYPES.map(() => '?').join(',')}) THEN -amount_base_cents ELSE 0 END),0) AS expense,
       COALESCE(SUM(CASE WHEN type IN (${INCOME_TYPES.map(() => '?').join(',')}) THEN amount_base_cents ELSE 0 END),0) AS income,
       COUNT(*) AS count
      FROM transactions WHERE ledger_id = ? AND deleted_at IS NULL AND txn_date BETWEEN ? AND ?
      GROUP BY txn_date ORDER BY txn_date`,
-    ...EXPENSE_TYPES, ...INCOME_TYPES, ledgerId, start, end
+    ...EXPENSE_TYPES, ...REFUND_TYPES, ...INCOME_TYPES, ledgerId, start, end
   ).map((r) => ({ date: r.date, expense: Number(r.expense), income: Number(r.income), count: Number(r.count) }));
 }
 
@@ -535,7 +556,7 @@ function netWorthTrend(ledgerId, months = 6) {
 }
 
 module.exports = {
-  INCOME_TYPES, EXPENSE_TYPES, TXN_SELECT, decorate,
+  INCOME_TYPES, EXPENSE_TYPES, REFUND_TYPES, TXN_SELECT, decorate,
   listTransactions, groupByDate, getTransaction,
   createTransaction, updateTransaction, softDelete, bulkDelete, markReimbursed,
   applyTags, saveSplits, splitsOf,

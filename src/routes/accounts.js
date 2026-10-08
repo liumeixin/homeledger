@@ -20,7 +20,7 @@ router.get('/accounts', auth.requireLogin, (req, res) => {
   // 最近 30 天各账户流水
   const flows = all(
     `SELECT account_id, COALESCE(SUM(CASE WHEN type IN ('expense','lend','repay_pay','fee') THEN amount_base_cents ELSE 0 END),0) AS out,
-            COALESCE(SUM(CASE WHEN type IN ('income','borrow','repay_receive','reimburse','refund','interest') THEN amount_base_cents ELSE 0 END),0) AS inflow
+            COALESCE(SUM(CASE WHEN type IN ('income','borrow','repay_receive','reimburse','refund','cashback','interest') THEN amount_base_cents ELSE 0 END),0) AS inflow
      FROM transactions WHERE ledger_id = ? AND deleted_at IS NULL AND txn_date >= date(?, '-30 day')
      GROUP BY account_id`,
     ledgerId, todayStr()

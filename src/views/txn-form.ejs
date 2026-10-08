@@ -11,6 +11,7 @@
   var moreTypes = [
     { key:'reimburse', label:'报销入账', icon:'🧾' },
     { key:'refund', label:'退款', icon:'↩️' },
+    { key:'cashback', label:'返现', icon:'🧧' },
     { key:'fee', label:'手续费', icon:'🏷️' },
     { key:'interest', label:'利息收入', icon:'🏦' },
     { key:'invest_buy', label:'投资买入', icon:'📉' },
@@ -21,7 +22,7 @@
   var isExtra = moreTypes.some(function(x){ return x.key === cur; });
   var multiAccount = ['transfer','invest_buy','invest_sell'].includes(cur);
   var noCategory = ['transfer','adjust'].includes(cur);
-  var catKind = cur === 'income' ? 'income' : 'expense';
+  var catKind = (cur === 'income' || cur === 'interest' || cur === 'reimburse') ? 'income' : 'expense';
   var amountValue = t.amount !== undefined ? t.amount : (t.amount_cents !== undefined && t.amount_cents !== null ? (t.amount_cents / 100).toFixed(2) : '');
   if (typeof amountValue === 'number') amountValue = amountValue.toFixed(2);
   var action = mode === 'edit' ? ('/transactions/' + t.id) : '/transactions';

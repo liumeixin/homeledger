@@ -82,7 +82,8 @@ const KEYWORD_RULES = [
   [/工资|薪资|薪水|月薪|发薪|代发工资|payroll/i, '工资', 'income'],
   [/年终奖|绩效奖|季度奖|奖金|目标奖/i, '奖金', 'income'],
   [/报销|报账|差旅报销|发票回款/i, '报销回款', 'income'],
-  [/退款|退货|退回|返现|价保/i, '退款', 'income'],
+  [/退款|退货|退回|价保/i, '退款', 'expense', 'refund'],
+  [/返现|还款金|云闪付.*(返|金)/i, '返现', 'expense', 'cashback'],
   [/红包(收|入)|收到红包|抢红包|微信红包(收)/i, '红包', 'income'],
   [/利息|结息|余额宝收益|零钱通收益/i, '利息收入', 'income'],
   [/基金|股票|理财|债券|黄金.*收益|证券|沪深|ETF/i, '基金收益', 'income'],
@@ -223,8 +224,8 @@ const ACCOUNT_KEYWORDS = [
 /** 关键词取分类名 */
 function classifyByKeywords(text) {
   const s = String(text || '');
-  for (const [re, cat, kind] of KEYWORD_RULES) {
-    if (re.test(s)) return { category: cat, kind };
+  for (const [re, cat, kind, txnType] of KEYWORD_RULES) {
+    if (re.test(s)) return { category: cat, kind, txnType };
   }
   return null;
 }
@@ -287,9 +288,9 @@ function parseTextByRules(text, { today = todayStr() } = {}) {
     const amount = extractAmount(line);
     if (!amount) continue;
     const cls = classifyByKeywords(line);
-    const kind = /收入|工资|报销|退款|收|入账/.test(line) && !cls ? 'income' : (cls?.kind || 'expense');
+    const kind = /收入|工资|报销|收|入账/.test(line) && !cls ? 'income' : (cls?.kind || 'expense');
     out.push({
-      type: /转账|转出|转到/.test(line) ? 'transfer' : kind === 'income' ? 'income' : 'expense',
+      type: /转账|转出|转到/.test(line) ? 'transfer' : cls?.txnType || (kind === 'income' ? 'income' : 'expense'),
       amount_cents: amount,
       currency: 'CNY',
       txn_date: parseDateWords(line, today),
@@ -410,7 +411,7 @@ const SYSTEM_PROMPT = `你是一个专业的记账助手，负责把「账单截
 2. 一张截图里可能包含多笔交易（例如账单列表），必须逐笔提取。
 3. 金额一律为数字（元），不要带货币符号；支出/付款为正常正数。
 4. 日期格式 YYYY-MM-DD；若截图只有月日则补齐为今年；无法确定则用今天。
-5. type 只能取：expense（支出）、income（收入）、transfer（转账）。
+5. type 只能取：expense（支出）、income（收入）、transfer（转账）、refund（退款/退货，负支出）、cashback（返现/还款金，负支出）。退款与返现用 refund/cashback，category_name 填原消费分类。
 6. category_name 必须从给定的分类列表中选择最贴近的「完整路径」，若都不合适则选「其他支出/其他」这类兜底项。
 7. 若能识别出付款方式，acct 填对应账户名。
 8. confidence 为 0~1 的小数，表示你对这笔提取的把握。
@@ -481,7 +482,7 @@ function resolveAccountId(ledgerId, nameHint) {
 
 /** 规范化单条草稿 */
 function normalizeItem(raw, ledgerId) {
-  const type = ['expense', 'income', 'transfer'].includes(raw.type) ? raw.type : 'expense';
+  const type = ['expense', 'income', 'transfer', 'refund', 'cashback'].includes(raw.type) ? raw.type : 'expense';
   const kind = type === 'income' ? 'income' : 'expense';
   const amountCents = Number.isFinite(Number(raw.amount_cents))
     ? Number(raw.amount_cents)

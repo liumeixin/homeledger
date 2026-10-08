@@ -65,7 +65,7 @@ function txFormData(ledgerId, userId) {
 
 /** 分析用：该笔交易的收支归属 */
 function kindOf(type) {
-  return ['income', 'interest', 'refund', 'reimburse'].includes(type) ? 'income' : 'expense';
+  return ['income', 'interest', 'reimburse'].includes(type) ? 'income' : 'expense';
 }
 
 module.exports = { categoryTree, flatCategories, accounts, archivedAccounts, members, tags, txFormData, kindOf };

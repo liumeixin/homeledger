@@ -61,7 +61,8 @@
             </div>
           </div>
           <%# 金额符号与配色统一用后端口径（decorate 提供 is_income/is_expense/flow）：
-              入账类（income/refund/reimburse/interest/repay_receive/borrow）→ + 绿色；
+              入账类（income/reimburse/interest/repay_receive/borrow）→ + 绿色；
+              负支出类（refund/cashback）→ - 红色，从所属分类支出冲减；
               流出类（expense/fee/lend/repay_pay）→ - 红色；
               搬移类（transfer/invest_*/adjust）→ 无符号中性，adjust 自带正负号 %>
           <div class="txn-amt amount <%= t.type === 'adjust' ? 'neutral' : (t.is_income ? 'income' : (t.is_expense ? 'expense' : 'neutral')) %>">

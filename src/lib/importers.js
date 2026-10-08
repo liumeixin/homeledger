@@ -83,7 +83,7 @@ function detectSource(headerLine, fullText) {
 const SKIP_STATUS = /已关闭|交易关闭|已退款|全额退款|退款成功|失败|已撤销|已取消|待付款|待收货|银行处理中|已退回/;
 
 /** 导出 CSV type_key 列的合法值 */
-const TXN_KEYS = new Set(['expense','income','transfer','lend','borrow','repay_receive','repay_pay','reimburse','refund','fee','interest','invest_buy','invest_sell','adjust']);
+const TXN_KEYS = new Set(['expense','income','transfer','lend','borrow','repay_receive','repay_pay','reimburse','refund','cashback','fee','interest','invest_buy','invest_sell','adjust']);
 
 function normalizeRow({ date, direction, amountText, merchant, desc, categoryText, accountText, status, orderNo }) {
   const amountCents = parseAmountToCents(amountText);

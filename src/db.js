@@ -475,6 +475,7 @@ const TXN_TYPES = [
   { key: 'repay_pay', label: '偿还借款', icon: '↪️', color: '#13c2c2', flow: 'out', group: '借贷' },
   { key: 'reimburse', label: '报销入账', icon: '🧾', color: '#722ed1', flow: 'in', group: '报销' },
   { key: 'refund', label: '退款', icon: '↩️', color: '#52c41a', flow: 'in', group: '日常' },
+  { key: 'cashback', label: '返现', icon: '🧧', color: '#52c41a', flow: 'in', group: '日常' },
   { key: 'fee', label: '手续费', icon: '🏷️', color: '#8c8c8c', flow: 'out', group: '金融' },
   { key: 'interest', label: '利息收入', icon: '🏦', color: '#52c41a', flow: 'in', group: '金融' },
   { key: 'invest_buy', label: '投资买入', icon: '📉', color: '#1677ff', flow: 'move', group: '投资' },
@@ -664,6 +665,7 @@ function txnEffects(t) {
     case 'repay_receive':
     case 'reimburse':
     case 'refund':
+    case 'cashback':
     case 'interest':
       push(t.account_id, a);
       break;

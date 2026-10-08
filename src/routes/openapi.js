@@ -199,7 +199,7 @@ function readTxnBody(ledgerId, body, { createdAccounts = [] } = {}) {
   if (body.amount_cents != null) amountCents = Math.round(Number(body.amount_cents) || 0);
   else if (body.amount != null) amountCents = Math.round(Number(body.amount) * 100) || 0;
   const isTransfer = ['transfer', 'invest_buy', 'invest_sell'].includes(type);
-  const kind = type === 'income' || ['refund', 'interest', 'repay_receive', 'reimburse'].includes(type) ? 'income' : 'expense';
+  const kind = type === 'income' || ['interest', 'repay_receive', 'reimburse'].includes(type) ? 'income' : 'expense';
   let category = null;
   if (body.category_id != null && body.category_id !== '') {
     category = get('SELECT id FROM categories WHERE id = ? AND (ledger_id IS NULL OR ledger_id = ?)', Number(body.category_id), ledgerId);
