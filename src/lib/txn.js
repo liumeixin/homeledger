@@ -441,7 +441,7 @@ function categoryBreakdown(ledgerId, start, end, kind = 'expense') {
        AND t.type IN (${types.map(() => '?').join(',')})
      GROUP BY COALESCE(pc.name, c.name, '未分类')
      ORDER BY total DESC`,
-    ledgerId, start, end, ...extraParams, ...types
+    ...extraParams, ledgerId, start, end, ...types
   );
   return rows.map((r) => ({ ...r, total: Number(r.total), cnt: Number(r.cnt) }));
 }
@@ -459,7 +459,8 @@ function subcategoryBreakdown(ledgerId, start, end, kind = 'expense', topName = 
        LEFT JOIN categories pc ON pc.id = c.parent_id
        WHERE t.ledger_id = ? AND t.deleted_at IS NULL AND t.txn_date BETWEEN ? AND ?
          AND t.type IN (${types.map(() => '?').join(',')})`;
-  const params = [ledgerId, start, end, ...(kind === 'income' ? [] : REFUND_TYPES), ...types];
+  // sumExpr 的占位符在 SELECT 中先于 WHERE 出现，须先绑
+  const params = [...(kind === 'income' ? [] : REFUND_TYPES), ledgerId, start, end, ...types];
   if (topName) { sql += ' AND COALESCE(pc.name, c.name) = ?'; params.push(topName); }
   sql += ' GROUP BY c.id ORDER BY total DESC';
   return all(sql, ...params).map((r) => ({ ...r, total: Number(r.total), cnt: Number(r.cnt) }));
